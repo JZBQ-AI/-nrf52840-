@@ -1,0 +1,22 @@
+/* For more help, browse the devicetree documentation at https://docs.zephyrproject.org/latest/build/dts/index.html
+ * You can also visit the nRF DeviceTree extension documentation at https://docs.nordicsemi.com/bundle/nrf-connect-vscode/page/guides/ncs_configure_app.html#devicetree-support-in-the-extension
+ */
+&button0 {
+	gpios = <&gpio0 25 (GPIO_ACTIVE_LOW | GPIO_PULL_UP)>;
+};
+
+&led0 {
+	gpios = <&gpio0 14 GPIO_ACTIVE_LOW>;
+};
+
+&led1 {
+	gpios = <&gpio0 15 GPIO_ACTIVE_LOW>;
+};
+
+&led2 {
+	gpios = <&gpio0 16 GPIO_ACTIVE_LOW>;
+};
+
+&led3 {
+	gpios = <&gpio0 17 GPIO_ACTIVE_LOW>;
+};
