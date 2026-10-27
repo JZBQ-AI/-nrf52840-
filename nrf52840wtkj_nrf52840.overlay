@@ -1,0 +1,42 @@
+/* For more help, browse the devicetree documentation at https://docs.zephyrproject.org/latest/build/dts/index.html
+ * You can also visit the nRF DeviceTree extension documentation at https://docs.nordicsemi.com/bundle/nrf-connect-vscode/page/guides/ncs_configure_app.html#devicetree-support-in-the-extension
+ */
+ &pinctrl {
+	spi0_default: spi0_default {
+		group1 {
+			psels = <NRF_PSEL(SPIM_SCK, 1, 2)>,
+				<NRF_PSEL(SPIM_MOSI, 1, 3)>;
+		};
+	};
+	spi0_sleep: spi0_sleep {
+		group1 {
+			psels = <NRF_PSEL(SPIM_SCK, 1, 2)>,
+				<NRF_PSEL(SPIM_MOSI, 1, 3)>;
+			low-power-enable;
+		};
+	};
+};
+&spi0 {
+	compatible = "nordic,nrf-spim";
+	status = "okay";
+	pinctrl-0 = <&spi0_default>;
+	pinctrl-1 = <&spi0_sleep>;
+	pinctrl-names = "default", "sleep";
+	cs-gpios = <&gpio1 4 GPIO_ACTIVE_LOW>;
+	oled: ssd1306@0 {
+		compatible = "solomon,ssd1306";
+		reg = <0>;
+		spi-max-frequency = <4000000>;
+		data-cmd-gpios = <&gpio1 5 GPIO_ACTIVE_HIGH>;
+		reset-gpios = <&gpio1 6 GPIO_ACTIVE_LOW>;
+		width = <128>;
+		height = <64>;
+		segment-offset = <0>;
+		page-offset = <0>;
+		display-offset = <0>;
+		multiplex-ratio = <63>;
+		segment-remap;
+		com-invdir;
+		prechargep = <0x22>;
+	};
+};
