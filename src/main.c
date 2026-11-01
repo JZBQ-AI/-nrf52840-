@@ -1,271 +1,124 @@
-#include <errno.h>
-#include <stdint.h>
 #include <stdio.h>
-
-#include <zephyr/device.h>
-#include <zephyr/drivers/i2c.h>
-#include <zephyr/display/cfb.h>
 #include <zephyr/kernel.h>
-#include <zephyr/sys/util.h>
+#include <zephyr/drivers/gpio.h>
 
-#define LIS2DH12_REG_WHO_AM_I       0x0F
-#define LIS2DH12_REG_CTRL1          0x20
-#define LIS2DH12_REG_CTRL4          0x23
-#define LIS2DH12_REG_STATUS         0x27
+//定义栈大小
+#define STACK_THREAD0_SIZE 512
+#define STACK_THREAD1_SIZE 512
+#define STACK_WORKER_SIZE 512
 
-#define LIS2DH12_WHO_AM_I_VALUE     0x33
-#define LIS2DH12_AUTO_INCREMENT     BIT(7)
+//定义线程优先级
+#define THREAD0_PRIORITY 2
+#define THREAD1_PRIORITY 3
+#define WORKER_PRIORITY 4
 
-/* 100 Hz, XYZ enabled, high-resolution mode */
-#define LIS2DH12_CTRL1_VALUE        ((5U << 4) | BIT(0) | BIT(1) | BIT(2))
+K_THREAD_STACK_DEFINE(my_stack_area, STACK_THREAD0_SIZE);
+struct k_work_q offload_work_q;//线程列队结构体
+struct k_work work;//工作项结构体
 
-/* BDU, +/-2 g, high-resolution mode */
-#define LIS2DH12_CTRL4_VALUE        (BIT(7) | BIT(3))
+void emulate_work(void)
+{
+    for (volatile int i = 0; i < 100000; i++);
+}
+void offload_function(struct k_work *work)
+{
+    uint64_t ts_start = k_uptime_get();
+    emulate_work();
+    int64_t work_run_time = k_uptime_delta(&ts_start);
+    printk("[WORKER] work execute time: %lld ms\n", work_run_time);
+}
+void thread0(void)
+{
+        //初始化
+    k_work_queue_start(&offload_work_q,my_stack_area,
+                       STACK_WORKER_SIZE,
+                       WORKER_PRIORITY,
+                       NULL);
+    k_work_init(&work, offload_function);
+    uint64_t time_stap;
+    int64_t delta_time;
+    while (1)
+    {
+        time_stap = k_uptime_get();
+        k_work_submit_to_queue(&offload_work_q, &work);
+        delta_time = k_uptime_delta(&time_stap);
+        printk("Thread 0 is running, delta time: %lld ms\n", delta_time);
+        k_msleep(20);
+    }
+}
+void thread1(void)
+{
+    uint64_t time_stap;
+    int64_t delta_time;
+    while (1)
+    {
+        time_stap = k_uptime_get();
+        emulate_work();
+        delta_time = k_uptime_delta(&time_stap);
+        printk("Thread 1 is running, delta time: %lld ms\n", delta_time);
+        k_msleep(20);
+    }
+}
+K_THREAD_DEFINE(thread0_id, STACK_THREAD0_SIZE, thread0, NULL, NULL, NULL, THREAD0_PRIORITY, 0, 0);     
+K_THREAD_DEFINE(thread1_id, STACK_THREAD1_SIZE, thread1, NULL, NULL, NULL, THREAD1_PRIORITY, 0, 0);
 
-#define LIS2DH12_STATUS_DRDY_MASK   BIT_MASK(4)
-#define LIS2DH12_SAMPLE_SIZE        7U
 
-struct lis2dh12_sample {
-	int16_t x_raw;
-	int16_t y_raw;
-	int16_t z_raw;
-	int32_t x_mg;
-	int32_t y_mg;
-	int32_t z_mg;
+
+
+/* //多线程学习
+#include <stdio.h>
+#include "zephyr/kernel.h"
+#include <zephyr/drivers/gpio.h>
+#include <zephyr/sys/atomic.h>
+#define STACKSIZE 1024	   // 栈大小
+#define THREAD0_PRIORITY 6 // 优先级高会打断优先级低
+#define THREAD1_PRIORITY 7 // 线程1 优先级
+#define LED_COUNT       2
+
+static const struct gpio_dt_spec leds[LED_COUNT] = {
+    GPIO_DT_SPEC_GET(DT_ALIAS(led0), gpios),
+    GPIO_DT_SPEC_GET(DT_ALIAS(led3), gpios),
 };
-
-static const struct i2c_dt_spec lis2dh12 =
-	I2C_DT_SPEC_GET(DT_NODELABEL(myaccel));
-
-/* For the SPI version, this points to ssd1306@0 on spi0. */
-static const struct device *const oled =
-	DEVICE_DT_GET(DT_NODELABEL(oled));
-
-static int lis2dh12_write_reg(uint8_t reg, uint8_t value)
+void thread0()
 {
-	uint8_t buffer[2] = {reg, value};
-
-	return i2c_write_dt(&lis2dh12, buffer, sizeof(buffer));
+    gpio_pin_configure_dt(&leds[0],GPIO_OUTPUT|GPIO_ACTIVE_LOW);
+    gpio_pin_set_dt(&leds[0],1);
+    gpio_pin_configure_dt(&leds[1],GPIO_OUTPUT|GPIO_ACTIVE_LOW);
+    gpio_pin_set_dt(&leds[1],1);
+	while (1)
+	{
+        
+        gpio_pin_toggle_dt(&leds[0]); // 翻转LED逻辑电平
+        gpio_pin_toggle_dt(&leds[1]);
+		printk("hello i am thread0\n");
+        k_msleep(1000); // 让出CPU，线程0进入就绪态
+	}
 }
-
-static int lis2dh12_init(void)
+ void thread1()
 {
-	uint8_t id = 0;
-	int ret;
-
-	if (!i2c_is_ready_dt(&lis2dh12)) {
-		printk("LIS2DH12 I2C device is not ready\n");
-		return -ENODEV;
+    gpio_pin_configure_dt(&leds[1],GPIO_OUTPUT|GPIO_ACTIVE_LOW);
+    gpio_pin_set_dt(&leds[1],1);
+	while (1)
+	{
+        gpio_pin_toggle_dt(&leds[1]); // 翻转LED逻辑电平
+		printk("hello i am thread1\n");
+        k_msleep(100); // 让出CPU，线程1进入就绪态
 	}
+} 
+// 静态方式创建线程
+K_THREAD_DEFINE(thread0_id, STACKSIZE, thread0, NULL, NULL, NULL, THREAD0_PRIORITY, 0, 0);
+K_THREAD_DEFINE(thread1_id, STACKSIZE, thread1, NULL, NULL, NULL, THREAD1_PRIORITY, 0, 0);
 
-	k_sleep(K_MSEC(10));
-
-	ret = i2c_reg_read_byte_dt(&lis2dh12, LIS2DH12_REG_WHO_AM_I, &id);
-	if (ret < 0) {
-		printk("LIS2DH12 WHO_AM_I read failed: %d\n", ret);
-		return ret;
-	}
-
-	if (id != LIS2DH12_WHO_AM_I_VALUE) {
-		printk("LIS2DH12 wrong ID: 0x%02X\n", id);
-		return -ENODEV;
-	}
-
-	ret = lis2dh12_write_reg(LIS2DH12_REG_CTRL1, 0);
-	if (ret < 0) {
-		return ret;
-	}
-
-	ret = lis2dh12_write_reg(LIS2DH12_REG_CTRL4, LIS2DH12_CTRL4_VALUE);
-	if (ret < 0) {
-		return ret;
-	}
-
-	ret = lis2dh12_write_reg(LIS2DH12_REG_CTRL1, LIS2DH12_CTRL1_VALUE);
-	if (ret < 0) {
-		return ret;
-	}
-
-	k_sleep(K_MSEC(20));
-	printk("LIS2DH12 initialized, ID=0x%02X\n", id);
-
+ int main(void)
+{
+	k_sleep(K_SECONDS(1));
 	return 0;
-}
-
-static int32_t lis2dh12_raw_to_mg(int16_t raw)
-{
-	int32_t scaled = (int32_t)raw * 1000;
-
-	/* Approximately 1024 counts = 1 g at high resolution and +/-2 g. */
-	return (scaled >= 0) ? ((scaled + 512) / 1024)
-			     : ((scaled - 512) / 1024);
-}
-
-static void lis2dh12_get_axis(const uint8_t data[LIS2DH12_SAMPLE_SIZE],
-			      size_t offset, int16_t *raw, int32_t *mg)
-{
-	int16_t value;
-
-	value = (int16_t)((uint16_t)data[offset] |
-			  ((uint16_t)data[offset + 1] << 8));
-
-	/* The sample is signed 12-bit and left-aligned. */
-	*raw = value >> 4;
-	*mg = lis2dh12_raw_to_mg(*raw);
-}
-
-static int lis2dh12_read(struct lis2dh12_sample *sample)
-{
-	uint8_t data[LIS2DH12_SAMPLE_SIZE];
-	int ret;
-
-	ret = i2c_burst_read_dt(
-		&lis2dh12,
-		LIS2DH12_REG_STATUS | LIS2DH12_AUTO_INCREMENT,
-		data,
-		sizeof(data));
-
-	if (ret < 0) {
-		return ret;
-	}
-
-	if ((data[0] & LIS2DH12_STATUS_DRDY_MASK) == 0U) {
-		return -EAGAIN;
-	}
-
-	lis2dh12_get_axis(data, 1, &sample->x_raw, &sample->x_mg);
-	lis2dh12_get_axis(data, 3, &sample->y_raw, &sample->y_mg);
-	lis2dh12_get_axis(data, 5, &sample->z_raw, &sample->z_mg);
-
-	return 0;
-}
-
-static int oled_init(void)
-{
-	int ret;
-
-	if (!device_is_ready(oled)) {
-		printk("SSD1306 SPI display is not ready\n");
-		return -ENODEV;
-	}
-
-	ret = cfb_framebuffer_init(oled);
-	if (ret < 0) {
-		printk("CFB initialization failed: %d\n", ret);
-		return ret;
-	}
-
-	ret = cfb_framebuffer_set_font(oled, 0);
-	if (ret < 0) {
-		printk("CFB font setup failed: %d\n", ret);
-		return ret;
-	}
-
-	ret = cfb_framebuffer_clear(oled, true);
-	if (ret < 0) {
-		printk("Display clear failed: %d\n", ret);
-		return ret;
-	}
-
-	ret = cfb_print(oled, "LIS2DH12", 0, 0);
-	if (ret < 0) {
-		return ret;
-	}
-
-	ret = cfb_framebuffer_finalize(oled);
-	if (ret == 0) {
-		printk("SSD1306 SPI display initialized\n");
-	}
-
-	return ret;
-}
-
-static int oled_show_sample(const struct lis2dh12_sample *sample)
-{
-	char x_line[16];
-	char y_line[16];
-	char z_line[16];
-	int ret;
-
-	snprintf(x_line, sizeof(x_line), "X %5d mg", (int)sample->x_mg);
-	snprintf(y_line, sizeof(y_line), "Y %5d mg", (int)sample->y_mg);
-	snprintf(z_line, sizeof(z_line), "Z %5d mg", (int)sample->z_mg);
-
-	ret = cfb_framebuffer_clear(oled, false);
-	if (ret < 0) {
-		return ret;
-	}
-
-	ret = cfb_print(oled, "LIS2DH12", 0, 0);
-	if (ret < 0) {
-		return ret;
-	}
-
-	ret = cfb_print(oled, x_line, 0, 16);
-	if (ret < 0) {
-		return ret;
-	}
-
-	ret = cfb_print(oled, y_line, 0, 32);
-	if (ret < 0) {
-		return ret;
-	}
-
-	ret = cfb_print(oled, z_line, 0, 48);
-	if (ret < 0) {
-		return ret;
-	}
-
-	return cfb_framebuffer_finalize(oled);
-}
-
-int main(void)
-{
-	struct lis2dh12_sample sample = {0};
-	bool oled_ready;
-	int ret;
-
-	ret = oled_init();
-	oled_ready = (ret == 0);
-
-	if (!oled_ready) {
-		printk("OLED initialization failed: %d\n", ret);
-	}
-
-	ret = lis2dh12_init();
-	if (ret < 0) {
-		printk("LIS2DH12 initialization failed: %d\n", ret);
-
-		while (1) {
-			k_sleep(K_FOREVER);
-		}
-	}
-
-	while (1) {
-		ret = lis2dh12_read(&sample);
-
-		if (ret == 0) {
-			printk("X=%d mg, Y=%d mg, Z=%d mg\n",
-			       sample.x_mg, sample.y_mg, sample.z_mg);
-
-			if (oled_ready) {
-				ret = oled_show_sample(&sample);
-
-				if (ret < 0) {
-					printk("OLED update failed: %d\n", ret);
-					oled_ready = false;
-				}
-			}
-		} else if (ret != -EAGAIN) {
-			printk("LIS2DH12 read failed: %d\n", ret);
-		}
-
-		k_sleep(K_MSEC(100));
-	}
-}
+}  */
 
 
-/* 加速度传感器 LIS2DH12 测试程序
+
+                    
+/* //加速度传感器 LIS2DH12 测试程序
 #include <errno.h>
 #include <stdint.h>
 #include <zephyr/drivers/i2c.h>
@@ -713,13 +566,12 @@ int main(void)
 struct gpio_dt_spec button0_struct = GPIO_DT_SPEC_GET(button0_NODE, gpios);//定义GPIO属性
 struct gpio_callback gpio_cb_struct={0};//定义回调函数结构体
 
-     /* @brief 回调函数
-     *
-     * @param port Device struct for the GPIO device.
-     * @param cb Original struct gpio_callback owning this handler
-     * @param pins Mask of pins that triggers the callback handler
-     *
-     void gpio_callback (const struct device *port,
+    //  @brief 回调函数
+    //  @param port Device struct for the GPIO device.
+    //  @param cb Original struct gpio_callback owning this handler
+    //  @param pi    ns Mask of pins that triggers the callback handler
+     
+    void gpio_callback (const struct device *port,
 					struct gpio_callback *cb,
 					gpio_port_pins_t pins)             
 {
@@ -785,7 +637,6 @@ int main(void)
     gpio_pin_configure_dt(&button0_struct,GPIO_INPUT|GPIO_ACTIVE_LOW|GPIO_PULL_UP);
     // 配置LED：输出、低电平有效
     gpio_pin_configure_dt(&led_struct,GPIO_OUTPUT|GPIO_ACTIVE_LOW);
-
     // 读取一次按键当前电平（**只在程序启动瞬间读一次，不在循环内**）
     int res=gpio_pin_get_dt(&button0_struct);
 
